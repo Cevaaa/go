@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import Optional, Tuple
 import json
 from core.models import PlayerColor, Move, Position, GameError
-from core.factory import create_game
+from core.factory import create_game, normalize_game_type
 from .renderer import ImageRenderer
 
 class UIController:
@@ -12,11 +12,11 @@ class UIController:
         self.game_type = "围棋"
         self.size = 19
         self.komi = 7.5
-        self.message = "Welcome to the Board Game Platform"  # 渲染文字改英文
+        # 图片文字使用英文，UI弹窗中文
+        self.message = "Welcome to the Board Game Platform"
         self.theme = "wood"
 
     def set_theme(self, theme: str):
-        # 确保主题立即生效
         self.theme = theme
         self.renderer.set_theme(theme)
 
@@ -27,12 +27,10 @@ class UIController:
         self.size = size
         self.komi = komi
         self.game = create_game(game_type, size, komi)
-        # 这里的 message 为英文（仅用于 Pillow 渲染）
         self.message = f"New game: {game_type} {size}x{size}"
         return self.get_image()
 
     def _turn_label(self):
-        # 返回英文标签用于图片渲染
         if not self.game:
             return ""
         if self.game.ended:
@@ -66,7 +64,6 @@ class UIController:
         )
 
     def _ended_popup(self) -> Optional[str]:
-        # 中文弹窗提示
         if not self.game or not self.game.ended:
             return None
         if self.game_type.lower() in ("go","weiqi","围棋"):
@@ -82,7 +79,6 @@ class UIController:
                         return "白方胜利！请开启新对局。"
                     else:
                         return "平局！请开启新对局。"
-        # 五子棋或认负结束
         if self.game.winner is None:
             return "平局！请开启新对局。"
         else:
@@ -90,16 +86,11 @@ class UIController:
 
     def click_canvas(self, evt) -> Tuple[object, Optional[str]]:
         if not self.game:
-            # UI 中文提示
-            popup = "请先开始新对局"
-            return self.get_image(), popup
+            return self.get_image(), "请先开始新对局"
         if self.game.ended:
-            # 对局结束后再次点击的提示
-            popup = "对局已结束，请开启新对局。"
-            return self.get_image(), popup
+            return self.get_image(), "对局已结束，请开启新对局。"
         pos = self.renderer.coord_from_xy(evt.index[0], evt.index[1], self.game.board)
         if pos is None:
-            # 仅图片文字英文，弹窗中文
             self.message = "Please click near a grid intersection"
             return self.get_image(), "请点击靠近网格交点的位置"
         move = Move(player=self.game.current, pos=pos)
@@ -107,12 +98,10 @@ class UIController:
             self.game.step(move)
             self.message = f"Move: {pos.row},{pos.col}"
             img = self.get_image()
-            # 如果此手导致胜负，给出弹窗
             if self.game.ended:
                 return img, self._ended_popup()
             return img, None
         except GameError as e:
-            # 渲染消息改为英文，弹窗中文
             self.message = "Illegal move or operation"
             return self.get_image(), f"错误：{str(e)}"
 
@@ -161,10 +150,16 @@ class UIController:
             return self.get_image(), "请先开始新对局"
         if not text_path:
             return self.get_image(), "请输入保存文件名（如 save.json）"
+        # 统一写入规范化棋种标识：'go' 或 'gomoku'
+        try:
+            canon = normalize_game_type(self.game_type)
+        except Exception:
+            # 理论不会发生，兜底为 'go'
+            canon = "go"
         data = self.game.serialize()
         with open(text_path, "w", encoding="utf-8") as f:
             json.dump({
-                "meta": {"type": self.game_type, "size": self.size, "komi": getattr(self.game, "komi", None)},
+                "meta": {"type": canon, "size": self.size, "komi": getattr(self.game, "komi", None)},
                 "data": data
             }, f, ensure_ascii=False, indent=2)
         self.message = f"Saved to {text_path}"
@@ -180,11 +175,35 @@ class UIController:
             data = obj.get("data")
             if not data:
                 raise ValueError("存档损坏")
-            self.game_type = meta.get("type", data.get("type", "围棋"))
+
+            # 解析棋种：优先 meta.type（规范化），再兼容 data.type 与中文/类名
+            meta_type = meta.get("type")
+            gt = None
+            if meta_type:
+                gt = normalize_game_type(meta_type)
+            else:
+                # 兼容早期存档：data.type 可能是类名或中文
+                raw = data.get("type")
+                if raw:
+                    try:
+                        gt = normalize_game_type(raw)
+                    except Exception:
+                        gt = None
+            # 最后兜底：缺失时基于提示字段推断（如 komi 存在更像围棋）
+            if gt is None:
+                if meta.get("komi") is not None:
+                    gt = "go"
+                else:
+                    # 再根据棋型特征弱判断：19/13/9 常见围棋，但不能作为强约束，这里保持中性，默认 gomoku 更安全
+                    gt = "gomoku"
+
+            self.game_type = "围棋" if gt == "go" else "五子棋"
             self.size = meta.get("size", len(data["board"]))
             self.komi = meta.get("komi", 7.5) or 7.5
-            self.game = create_game(self.game_type, self.size, self.komi)
+
+            self.game = create_game(gt, self.size, self.komi)
             self.game.deserialize(data)
+
             self.message = f"Loaded: {self.game_type} {self.size}"
             return self.get_image(), f"读取存档成功：{self.game_type} {self.size}"
         except Exception as e:
