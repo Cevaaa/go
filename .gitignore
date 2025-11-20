@@ -1,0 +1,8 @@
+# Ignore Python bytecode caches
+__pycache__/
+**/__pycache__/
+
+# (可选) 进一步忽略编译后的字节码文件
+*.pyc
+*.pyo
+*.pyd
