@@ -8,7 +8,9 @@ class GomokuGame(Game):
         super().__init__(size)
 
     def is_legal(self, move: Move) -> bool:
-        if move.pass_move or move.resign:
+        if move.resign:
+            return True
+        if move.pass_move:
             return False
         if move.pos is None:
             return False
@@ -20,6 +22,10 @@ class GomokuGame(Game):
         return True
 
     def apply_move(self, move: Move):
+        if move.resign:
+            self.ended = True
+            self._winner = PlayerColor.WHITE if move.player == PlayerColor.BLACK else PlayerColor.BLACK
+            return
         p = move.pos
         piece = Piece.from_player(move.player)
         self.board.set(p, piece)

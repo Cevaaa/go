@@ -55,9 +55,6 @@ class GoGame(Game):
         # capture opponent neighbors without liberties
         opp_piece = Piece.BLACK if piece == Piece.WHITE else Piece.WHITE
         adj_opp = [nb for nb in self.board.neighbors(p) if self.board.get(nb) == opp_piece]
-        captured = 0
-        # copy then operate on temp board: we directly use board then revert (simple and safe here)
-        # capture (on temp: but we used real board, so we need to remember and revert)
         to_clear = []
         for nb in adj_opp:
             stones, libs = flood_group_and_liberties(self.board, nb)
@@ -65,10 +62,9 @@ class GoGame(Game):
                 to_clear.extend(list(stones))
         for s in to_clear:
             self.board.set(s, Piece.EMPTY)
-            captured += 1
         # now check self liberties
         stones, libs = flood_group_and_liberties(self.board, p)
-        legal = len(libs) > 0 or captured > 0  # suicide forbidden unless capture occurs
+        legal = len(libs) > 0 or len(to_clear) > 0  # suicide forbidden unless capture occurs
         # revert simulation
         self.board.set(p, Piece.EMPTY)
         for s in to_clear:
@@ -85,7 +81,6 @@ class GoGame(Game):
             self.last_pos = None
             if self.consecutive_pass >= 2:
                 self.ended = True
-                # winner determined at scoring time (UI会调用 get_state 信息并显示待结算提示)
             else:
                 self.current = PlayerColor.WHITE if self.current == PlayerColor.BLACK else PlayerColor.BLACK
             return
@@ -101,7 +96,6 @@ class GoGame(Game):
         # capture opponent
         opp_piece = Piece.BLACK if piece == Piece.WHITE else Piece.WHITE
         adj_opp = [nb for nb in self.board.neighbors(p) if self.board.get(nb) == opp_piece]
-        before_counts = (self.captured_black, self.captured_white)
         captured = capture_if_no_liberty(self.board, adj_opp)
         if captured > 0:
             if opp_piece == Piece.BLACK:
@@ -109,12 +103,10 @@ class GoGame(Game):
             else:
                 self.captured_white += captured
 
-        # if self group has no liberties after move (and no capture), it's suicide (should have been rejected in is_legal)
+        # if self group has no liberties after move (and no capture), it's suicide (should have been rejected)
         stones, libs = flood_group_and_liberties(self.board, p)
         if len(libs) == 0:
-            # rollback to safe state (shouldn't happen)
             self.board.set(p, Piece.EMPTY)
-            # restore captured counters not needed since capture wasn't applied if suicide occurred here
             raise GameError("非法：自杀点")
 
         # switch
@@ -141,7 +133,7 @@ class GoGame(Game):
         """Compute territory scoring only after two consecutive passes or if ended already."""
         if not self.ended:
             return None
-        # simple territory scoring: count empty intersections that are adjacent only to one color
+        # simple territory scoring
         size = self.board.size
         visited = [[False]*size for _ in range(size)]
         def flood_empty(sr, sc):

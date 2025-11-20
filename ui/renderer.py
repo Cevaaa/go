@@ -16,9 +16,10 @@ class ImageRenderer:
         self.margin = margin
         self.theme = theme
 
-    def render(self, board: Board, game_type: str, last: Optional[Position], msg: str, turn: Optional[PlayerColor], theme: Optional[str]=None):
-        if theme:
-            self.theme = theme
+    def set_theme(self, theme: str):
+        self.theme = theme
+
+    def render(self, board: Board, game_type: str, last: Optional[Position], msg: str, turn: Optional[PlayerColor]):
         size = board.size
         cell = self.cell
         margin = self.margin
@@ -88,11 +89,11 @@ class ImageRenderer:
             cy = margin + last.row*cell
             draw.rectangle((cx-6, cy-6, cx+6, cy+6), outline=(200,30,30), width=3)
 
-        # footer text
+        # footer text (English only for Pillow)
         font = _load_font(16)
         footer = msg or ""
         if turn:
-            footer = f"{footer}  当前手: {'黑' if turn==PlayerColor.BLACK else '白'}"
+            footer = f"{footer}  | Turn: {'Black' if turn==PlayerColor.BLACK else 'White'}"
         draw.rectangle((0, H, W, H+80), fill=(250,250,250))
         draw.text((10, H+10), footer, fill=(30,30,30), font=font)
 
@@ -106,7 +107,6 @@ class ImageRenderer:
         grid_x = round((x - margin) / cell)
         grid_y = round((y - margin) / cell)
         if 0 <= grid_x < size and 0 <= grid_y < size:
-            # check closeness
             px = margin + grid_x*cell
             py = margin + grid_y*cell
             if abs(px - x) <= cell*0.45 and abs(py - y) <= cell*0.45:
