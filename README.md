@@ -1,4 +1,4 @@
-# 棋类对战平台（第一阶段）
+# 棋类对战平台（第二阶段）
 
 作者：陈骁
 
@@ -17,6 +17,10 @@ UI 使用 Gradio，点击棋盘落子，美观、响应式。后端与 UI 分离
 
 ### 2.1 分层架构
 - core/ 基础与棋规
+  - ai/
+    - base.py：AI 接口与基类
+    - random_ai.py：一级AI（随机合法落子）
+    - reversi_rule_ai.py：二级AI（黑白棋启发式评分，稳定胜过随机）
   - board.py：网格/位置/邻接/序列化
   - rules.py：通用规则算法（五连、气与提子等）
   - game.py：抽象模板（历史快照、悔棋、通用序列化）
@@ -25,6 +29,8 @@ UI 使用 Gradio，点击棋盘落子，美观、响应式。后端与 UI 分离
   - factory.py：工厂方法扩展，统一规范类型标识
   - go.py：围棋实现（继承 Game，使用气与提子策略）
   - models.py：枚举、异常、数据模型
+  - accounts.py：账户模型、仓库、服务
+  - replay.py：回放记录与播放器（Recorder、Replayer）
 - ui/
   - renderer.py：PIL 渲染（英文文字），复用圆子绘制，支持不同棋种的视觉差异
   - controller.py：UI 控制器（按钮与事件逻辑），扩展对 Reversi 的处理（跳过回合、终局判定、保存/读取）
