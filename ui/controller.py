@@ -1,14 +1,20 @@
 from __future__ import annotations
 from typing import Optional, Tuple
 import json
+import threading
+import time
+
 from core.models import PlayerColor, Move, Position, GameError
 from core.factory import create_game, normalize_game_type
 from .renderer import ImageRenderer
 
-# AI
+# AI（保持第二阶段AI版本）
 from core.ai.base import IGameAI
 from core.ai.random_ai import RandomReversiAI
 from core.ai.reversi_rule_ai import HeuristicReversiAI
+
+# 回放
+from core.replay import Replayer, Recorder, ReplayEvent
 
 class UIController:
     def __init__(self):
@@ -23,16 +29,21 @@ class UIController:
         self.black_side = "玩家"  # or "AI"
         self.white_side = "玩家"  # or "AI"
         self.ai_kind = "Reversi"  # 预留扩展
-        self.ai_level = 1         # 1: Random, 2: Heuristic
+        self.ai_level = 1
         self._ai_black: Optional[IGameAI] = None
         self._ai_white: Optional[IGameAI] = None
+        # 回放控制
+        self.replay_mode: bool = False
+        self.replayer: Optional[Replayer] = None
+        self.replay_speed: float = 1.0   # 1x
+        self._play_thread: Optional[threading.Thread] = None
+        self._play_flag: bool = False
 
     def set_theme(self, theme: str):
         self.theme = theme
         self.renderer.set_theme(theme)
 
     def _build_ai(self, level: int) -> IGameAI:
-        # 仅 Reversi 有效
         if level == 1:
             return RandomReversiAI()
         return HeuristicReversiAI(alpha=0.12)
@@ -49,6 +60,10 @@ class UIController:
     def new_game(self, game_type: str, size: int, komi: float, black_side: str = "玩家", white_side: str = "玩家", ai_kind: str = "Reversi", ai_level: int = 1):
         if size < 8 or size > 19:
             raise GameError("棋盘大小需在 8~19 之间")
+        self._stop_play_thread()
+        self.replay_mode = False
+        self.replayer = None
+
         self.game_type = game_type
         self.size = size
         self.komi = komi
@@ -57,8 +72,13 @@ class UIController:
         self.ai_kind = ai_kind
         self.ai_level = int(ai_level)
         self.game = create_game(game_type, size, komi)
+
+        # 新对局录像默认开启
+        if hasattr(self.game, "recorder"):
+            self.game.recorder.enabled = True
+            self.game.recorder.start()
+
         self._refresh_ai_agents()
-        # 非 Reversi 的棋种不开启AI
         if normalize_game_type(game_type) != "reversi" and (self.black_side == "AI" or self.white_side == "AI"):
             self.black_side = "玩家"
             self.white_side = "玩家"
@@ -67,13 +87,16 @@ class UIController:
             self.message = "AI is only available for Reversi currently. Switched to PvP."
         else:
             self.message = f"New game: {game_type} {size}x{size}"
-        # 新局后尝试让 AI 先手（如黑为AI）
         self._maybe_ai_play_loop()
         return self.get_image()
 
     def _turn_label(self):
         if not self.game:
             return ""
+        if self.replay_mode:
+            idx = self.replayer.current_index() if self.replayer else -1
+            total = self.replayer.total() if self.replayer else 0
+            return f"Replay: {idx+1}/{total}"
         if self.game.ended:
             if self.game_type.lower() in ("go","weiqi","围棋"):
                 from core.go import GoGame
@@ -133,8 +156,11 @@ class UIController:
         moves_now = self.game.legal_moves()
         if moves_now:
             return False
+        prev = self.game.current
         self.game.current = PlayerColor.WHITE if self.game.current == PlayerColor.BLACK else PlayerColor.BLACK
         self.message = "No legal move; turn skipped."
+        # 录像：记录 skip
+        self.game.record_skip(prev)
         moves_after = self.game.legal_moves()
         if not moves_after:
             counts = self.game.count_discs()
@@ -174,6 +200,8 @@ class UIController:
 
     # ------- AI 回合循环 -------
     def _agent_for_current(self) -> Optional[IGameAI]:
+        if self.replay_mode:
+            return None
         if normalize_game_type(self.game_type) != "reversi":
             return None
         if self.game.current == PlayerColor.BLACK:
@@ -182,9 +210,8 @@ class UIController:
             return self._ai_white
 
     def _maybe_ai_play_once(self) -> bool:
-        if not self.game or self.game.ended:
+        if not self.game or self.game.ended or self.replay_mode:
             return False
-        # Reversi 开局/上一手后可能无合法步，先尝试跳过或终局
         if normalize_game_type(self.game_type) == "reversi":
             if self._reversi_auto_skip_or_end():
                 return True
@@ -195,7 +222,6 @@ class UIController:
             return False
         pos = agent.select_move(self.game)
         if pos is None:
-            # 无合法步（理论上 _reversi_auto_skip_or_end 已处理）
             return False
         try:
             self.game.step(Move(player=self.game.current, pos=pos))
@@ -206,21 +232,22 @@ class UIController:
                     self._reversi_auto_skip_or_end()
             return True
         except GameError:
-            # 极少数竞态/非法（不应发生），忽略
             return False
 
     def _maybe_ai_play_loop(self):
-        # 连续让所有AI方执行，直到轮到玩家或对局结束
         safety = 512
         progressed = True
         while progressed and safety > 0:
             progressed = self._maybe_ai_play_once()
             safety -= 1
 
-    # ------- 事件接口 -------
+    # ------- 事件接口（交互/保存/读取） -------
     def click_canvas(self, evt) -> Tuple[object, Optional[str]]:
         if not self.game:
             return self.get_image(), "请先开始新对局"
+
+        if self.replay_mode:
+            return self.get_image(), "回放模式中，无法下子。"
 
         if normalize_game_type(self.game_type) == "reversi":
             self._reversi_auto_skip_or_end()
@@ -252,7 +279,6 @@ class UIController:
                 self._reversi_check_full_end()
                 if not self.game.ended:
                     self._reversi_auto_skip_or_end()
-            # 玩家走子后，若轮到AI，自动走
             self._maybe_ai_play_loop()
             img = self.get_image()
             if self.game.ended:
@@ -265,9 +291,10 @@ class UIController:
             return self.get_image(), f"错误：{str(e)}"
 
     def do_pass(self) -> Tuple[object, Optional[str]]:
-        # 仅围棋允许“虚着”
         if not self.game:
             return self.get_image(), "请先开始新对局"
+        if self.replay_mode:
+            return self.get_image(), "回放模式中，无法操作。"
         from core.go import GoGame
         if not isinstance(self.game, GoGame):
             return self.get_image(), "仅围棋可使用虚着"
@@ -277,7 +304,6 @@ class UIController:
             self.game.step(Move(player=self.game.current, pass_move=True))
             if self.game.ended:
                 self.message = "Both passed. Scoring."
-                # 围棋终局后不再触发AI（围棋未启用AI）
                 return self.get_image(), self._ended_popup()
             else:
                 self.message = "Pass"
@@ -289,6 +315,8 @@ class UIController:
     def resign(self) -> Tuple[object, Optional[str]]:
         if not self.game:
             return self.get_image(), "请先开始新对局"
+        if self.replay_mode:
+            return self.get_image(), "回放模式中，无法操作。"
         if self.game.ended:
             return self.get_image(), "对局已结束，请开启新对局。"
         try:
@@ -302,6 +330,8 @@ class UIController:
     def undo(self) -> Tuple[object, Optional[str]]:
         if not self.game:
             return self.get_image(), "请先开始新对局"
+        if self.replay_mode:
+            return self.get_image(), "回放模式中，无法操作。"
         ok = self.game.undo()
         self.message = "Undo" if ok else "No move to undo"
         return self.get_image(), ("悔棋成功" if ok else "无棋可悔")
@@ -328,6 +358,7 @@ class UIController:
         if not text_path:
             return self.get_image(), "请输入要读取的文件名"
         try:
+            self._stop_play_thread()
             with open(text_path, "r", encoding="utf-8") as f:
                 obj = json.load(f)
             meta = obj.get("meta", {})
@@ -357,12 +388,115 @@ class UIController:
             self.game.deserialize(data)
             self.message = f"Loaded: {self.game_type} {self.size}"
 
-            # 读档后根据当前UI配置重建AI（不从存档恢复AI配置）
-            self._refresh_ai_agents()
-            # 如果轮到AI则自动走
-            self._maybe_ai_play_loop()
+            # 如有录像数据，准备回放器
+            rep = data.get("replay")
+            if rep and rep.get("events"):
+                self._prepare_replayer_from_data(gt, rep)
+            else:
+                self.replay_mode = False
+                self.replayer = None
+
+            # 读档后，若未进入回放，且轮到AI则自动走
+            if not self.replay_mode:
+                self._refresh_ai_agents()
+                self._maybe_ai_play_loop()
 
             return self.get_image(), f"读取存档成功：{self.game_type} {self.size}"
         except Exception as e:
             self.message = "Load failed"
             return self.get_image(), f"读取失败：{e}"
+
+    # ------- 回放控制 -------
+    def _prepare_replayer_from_data(self, canon_type: str, rep_dict):
+        events = [ReplayEvent(**e) for e in rep_dict.get("events", [])]
+        snapshots = rep_dict.get("snapshots", [])
+        k = rep_dict.get("k", 10)
+        meta = {"type": canon_type, "size": self.size, "komi": self.komi}
+        self.replayer = Replayer()
+        self.replayer.bind_factory(lambda t, s, kmi: create_game(t, s, kmi))
+        self.replayer.load(meta, snapshots, events, k)
+        # 将回放游戏状态替换到 UI 的 game 上（共享渲染）
+        if self.replayer.game:
+            self.game = self.replayer.game
+        self.replay_mode = True
+        self.message = "Replay loaded. Use controls to play."
+
+    def replay_enter_from_current(self):
+        # 从当前对局（含 recorder）进入回放（常用于新局或旧存档无 replay）
+        if not self.game or not hasattr(self.game, "recorder"):
+            return self.get_image(), "当前对局无法进入回放。"
+        rep = self.game.recorder.to_dict()
+        if not rep.get("events"):
+            return self.get_image(), "当前没有可回放的事件。"
+        canon = normalize_game_type(self.game_type)
+        self._prepare_replayer_from_data(canon, rep)
+        return self.get_image(), "已进入回放模式。"
+
+    def replay_toggle_record(self, on: bool):
+        if not self.game or not hasattr(self.game, "recorder"):
+            return self.get_image(), "当前对局不支持录像。"
+        self.game.recorder.enabled = bool(on)
+        if on:
+            self.game.recorder.start()
+            return self.get_image(), "录像已开启。"
+        else:
+            self.game.recorder.stop()
+            return self.get_image(), "录像已关闭。"
+
+    def replay_set_speed(self, speed: float):
+        self.replay_speed = max(0.25, min(4.0, float(speed)))
+        return self.get_image(), f"回放速度：{self.replay_speed}x"
+
+    def replay_start(self):
+        if not self.replay_mode or not self.replayer:
+            return self.get_image(), "未处于回放模式。"
+        if self._play_thread and self._play_thread.is_alive():
+            self._play_flag = True
+            return self.get_image(), None
+        self._play_flag = True
+        self._play_thread = threading.Thread(target=self._play_loop, daemon=True)
+        self._play_thread.start()
+        return self.get_image(), None
+
+    def _play_loop(self):
+        while self._play_flag and self.replayer and self.replayer.step_next():
+            # 推进一帧后，要求UI刷新；此处仅更新 message，UI 层通过回调刷新图像
+            self.message = "Replaying..."
+            time.sleep(max(0.05, 0.6 / self.replay_speed))
+        self._play_flag = False
+        self.message = "Replay paused or ended."
+
+    def replay_pause(self):
+        self._play_flag = False
+        return self.get_image(), None
+
+    def replay_stop(self):
+        self._stop_play_thread()
+        if self.replay_mode and self.replayer:
+            self.replayer.reset_to_start()
+        return self.get_image(), "回放已停止。"
+
+    def _stop_play_thread(self):
+        self._play_flag = False
+        if self._play_thread and self._play_thread.is_alive():
+            try:
+                self._play_thread.join(timeout=0.1)
+            except:
+                pass
+        self._play_thread = None
+
+    def replay_next(self):
+        if not self.replay_mode or not self.replayer:
+            return self.get_image(), "未处于回放模式。"
+        ok = self.replayer.step_next()
+        if not ok:
+            return self.get_image(), "已到最后一步。"
+        return self.get_image(), None
+
+    def replay_prev(self):
+        if not self.replay_mode or not self.replayer:
+            return self.get_image(), "未处于回放模式。"
+        ok = self.replayer.step_prev()
+        if not ok:
+            return self.get_image(), "已在起始位置。"
+        return self.get_image(), None

@@ -4,7 +4,6 @@ from .go import GoGame
 from .reversi import ReversiGame
 
 def normalize_game_type(game_type: str) -> str:
-    """Normalize user/meta type to canonical id: 'go', 'gomoku', 'reversi'."""
     gt = (game_type or "").strip().lower()
     if gt in ("go", "weiqi", "围棋"):
         return "go"

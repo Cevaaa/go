@@ -24,7 +24,6 @@ class ImageRenderer:
         cell = self.cell
         margin = self.margin
         W = H = margin*2 + cell*(size-1)
-        # background
         if self.theme == "wood":
             bg_color = (236, 200, 120)
             line_color = (60, 40, 10)
@@ -34,7 +33,6 @@ class ImageRenderer:
         img = Image.new("RGB", (W, H+80), bg_color)
         draw = ImageDraw.Draw(img)
 
-        # grid
         for i in range(size):
             x0 = margin
             x1 = margin + cell*(size-1)
@@ -45,7 +43,6 @@ class ImageRenderer:
             y1 = margin + cell*(size-1)
             draw.line((x, y0, x, y1), fill=line_color, width=2)
 
-        # star points only for Go
         low = game_type.lower()
         if low in ("go", "weiqi", "围棋"):
             stars = []
@@ -69,7 +66,6 @@ class ImageRenderer:
                 cy = margin + r*cell
                 draw.ellipse((cx-4, cy-4, cx+4, cy+4), fill=line_color)
 
-        # stones/discs
         for r in range(size):
             for c in range(size):
                 p = Position(r, c)
@@ -81,13 +77,11 @@ class ImageRenderer:
                 radius = int(cell*0.45)
                 color = (20, 20, 20) if piece == Piece.BLACK else (240, 240, 240)
                 draw.ellipse((cx-radius, cy-radius, cx+radius, cy+radius), fill=color, outline=(0,0,0))
-        # last move marker
         if last is not None:
             cx = margin + last.col*cell
             cy = margin + last.row*cell
             draw.rectangle((cx-6, cy-6, cx+6, cy+6), outline=(200,30,30), width=3)
 
-        # footer text (English only for Pillow)
         font = _load_font(16)
         footer = msg or ""
         if turn:
