@@ -27,13 +27,16 @@ class UIController:
         self.size = size
         self.komi = komi
         self.game = create_game(game_type, size, komi)
+        # 特殊说明：Reversi 初始即放置4子，current=BLACK
         self.message = f"New game: {game_type} {size}x{size}"
         return self.get_image()
 
     def _turn_label(self):
         if not self.game:
             return ""
+        # 通用终局渲染（英文，仅用于图片）
         if self.game.ended:
+            # 尝试围棋详细分数
             if self.game_type.lower() in ("go","weiqi","围棋"):
                 from core.go import GoGame
                 if isinstance(self.game, GoGame):
@@ -47,6 +50,7 @@ class UIController:
                             return f"End: White wins (B {b:.1f} : W {w:.1f}, komi {self.game.komi})"
                         else:
                             return f"End: Draw (B {b:.1f} : W {w:.1f})"
+            # 其他棋种按 winner 渲染
             if self.game.winner is None:
                 return "End: Draw"
             else:
@@ -60,12 +64,13 @@ class UIController:
         text = f"{self.message} | {self._turn_label()}"
         return self.renderer.render(
             self.game.board, self.game_type, self.game.last_pos, text,
-            None if self.game.ended else self.game.current
+            None if getattr(self.game, "ended", False) else self.game.current
         )
 
     def _ended_popup(self) -> Optional[str]:
-        if not self.game or not self.game.ended:
+        if not self.game or not getattr(self.game, "ended", False):
             return None
+        # 围棋：按分数提示
         if self.game_type.lower() in ("go","weiqi","围棋"):
             from core.go import GoGame
             if isinstance(self.game, GoGame):
@@ -79,33 +84,103 @@ class UIController:
                         return "白方胜利！请开启新对局。"
                     else:
                         return "平局！请开启新对局。"
+        # 其他（五子棋/黑白棋）：依据 winner 或计数
         if self.game.winner is None:
             return "平局！请开启新对局。"
         else:
             return f"{'黑方' if self.game.winner==PlayerColor.BLACK else '白方'}胜利！请开启新对局。"
 
+    def _reversi_auto_skip_or_end(self):
+        """黑白棋：若当前方无合法着法则自动跳过；若双方均无合法着法则终局并判胜负。"""
+        from core.reversi import ReversiGame
+        if not isinstance(self.game, ReversiGame) or self.game.ended:
+            return
+        moves_now = self.game.legal_moves()
+        if moves_now:
+            return
+        # 当前无合法手：切手并提示
+        prev = self.game.current
+        self.game.current = PlayerColor.WHITE if self.game.current == PlayerColor.BLACK else PlayerColor.BLACK
+        self.message = "No legal move; turn skipped."
+        # 切手后检查对方
+        moves_after = self.game.legal_moves()
+        if not moves_after:
+            # 双方均无合法手：终局，按子数判胜负
+            counts = self.game.count_discs()
+            b, w = counts["BLACK"], counts["WHITE"]
+            self.game.ended = True
+            if b > w:
+                self.game._winner = PlayerColor.BLACK
+            elif w > b:
+                self.game._winner = PlayerColor.WHITE
+            else:
+                self.game._winner = None
+
+    def _reversi_check_full_end(self):
+        """黑白棋：棋盘满也应终局计数。"""
+        from core.reversi import ReversiGame
+        if not isinstance(self.game, ReversiGame) or self.game.ended:
+            return
+        size = self.game.board.size
+        full = True
+        for r in range(size):
+            for c in range(size):
+                if self.game.board.grid[r][c].value == 0:
+                    full = False
+                    break
+            if not full:
+                break
+        if full:
+            counts = self.game.count_discs()
+            b, w = counts["BLACK"], counts["WHITE"]
+            self.game.ended = True
+            if b > w:
+                self.game._winner = PlayerColor.BLACK
+            elif w > b:
+                self.game._winner = PlayerColor.WHITE
+            else:
+                self.game._winner = None
+
     def click_canvas(self, evt) -> Tuple[object, Optional[str]]:
         if not self.game:
             return self.get_image(), "请先开始新对局"
+        # 黑白棋：先检查是否需要自动跳过（上一手结束后可能无合法手）
+        if self.game_type.lower() in ("reversi","黑白棋","othello"):
+            self._reversi_auto_skip_or_end()
+            if self.game.ended:
+                return self.get_image(), self._ended_popup()
+
         if self.game.ended:
             return self.get_image(), "对局已结束，请开启新对局。"
+
         pos = self.renderer.coord_from_xy(evt.index[0], evt.index[1], self.game.board)
         if pos is None:
             self.message = "Please click near a grid intersection"
             return self.get_image(), "请点击靠近网格交点的位置"
+
+        # 普通走子
         move = Move(player=self.game.current, pos=pos)
         try:
             self.game.step(move)
             self.message = f"Move: {pos.row},{pos.col}"
+            # 黑白棋：步后可能出现自动跳过或终局
+            if self.game_type.lower() in ("reversi","黑白棋","othello"):
+                self._reversi_check_full_end()
+                if not self.game.ended:
+                    self._reversi_auto_skip_or_end()
             img = self.get_image()
             if self.game.ended:
                 return img, self._ended_popup()
             return img, None
         except GameError as e:
             self.message = "Illegal move or operation"
+            # 对 Reversi 给出更具体提示
+            if self.game_type.lower() in ("reversi","黑白棋","othello"):
+                return self.get_image(), "非法落子：该位置无法翻转对方棋子"
             return self.get_image(), f"错误：{str(e)}"
 
     def do_pass(self) -> Tuple[object, Optional[str]]:
+        # 仅围棋允许“虚着”
         if not self.game:
             return self.get_image(), "请先开始新对局"
         from core.go import GoGame
@@ -150,11 +225,10 @@ class UIController:
             return self.get_image(), "请先开始新对局"
         if not text_path:
             return self.get_image(), "请输入保存文件名（如 save.json）"
-        # 统一写入规范化棋种标识：'go' 或 'gomoku'
+        # 统一写入规范化棋种标识
         try:
             canon = normalize_game_type(self.game_type)
         except Exception:
-            # 理论不会发生，兜底为 'go'
             canon = "go"
         data = self.game.serialize()
         with open(text_path, "w", encoding="utf-8") as f:
@@ -182,22 +256,17 @@ class UIController:
             if meta_type:
                 gt = normalize_game_type(meta_type)
             else:
-                # 兼容早期存档：data.type 可能是类名或中文
                 raw = data.get("type")
                 if raw:
                     try:
                         gt = normalize_game_type(raw)
                     except Exception:
                         gt = None
-            # 最后兜底：缺失时基于提示字段推断（如 komi 存在更像围棋）
             if gt is None:
-                if meta.get("komi") is not None:
-                    gt = "go"
-                else:
-                    # 再根据棋型特征弱判断：19/13/9 常见围棋，但不能作为强约束，这里保持中性，默认 gomoku 更安全
-                    gt = "gomoku"
+                # 兜底：无 komi 更像 gomoku/reversi，此处保守选 gomoku
+                gt = "gomoku"
 
-            self.game_type = "围棋" if gt == "go" else "五子棋"
+            self.game_type = ("围棋" if gt == "go" else ("五子棋" if gt == "gomoku" else "黑白棋"))
             self.size = meta.get("size", len(data["board"]))
             self.komi = meta.get("komi", 7.5) or 7.5
 

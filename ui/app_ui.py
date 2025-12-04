@@ -18,7 +18,7 @@ def build_app():
         }
         """
     ) as demo:
-        gr.Markdown("## 棋类对战平台（五子棋 / 围棋）")
+        gr.Markdown("## 棋类对战平台（五子棋 / 围棋 / 黑白棋）")
 
         # 顶层两列布局：左（棋盘与操作），右（可隐藏设置边栏与提示信息）
         with gr.Row(elem_classes=["two-col"]):
@@ -39,7 +39,7 @@ def build_app():
                     btn_undo = gr.Button("悔棋")
                     btn_resign = gr.Button("认负")
 
-                # “开始新对局”按钮要求位于三按钮正下方（单独一行）
+                # “开始新对局”按钮位于三按钮正下方（单独一行）
                 with gr.Row():
                     btn_new = gr.Button("开始新对局", variant="primary")
 
@@ -55,16 +55,17 @@ def build_app():
                 # 使用 Accordion 可折叠隐藏侧边栏，默认展开
                 with gr.Accordion("设置与提示（可收起/展开）", open=True):
                     with gr.Group():
-                        game_type = gr.Radio(choices=["围棋", "五子棋"], value="围棋", label="游戏类型")
-                        size = gr.Slider(8, 19, value=19, step=1, label="棋盘大小")
-                        komi = gr.Number(value=7.5, label="贴目（围棋，白贴目）")
+                        game_type = gr.Radio(choices=["围棋", "五子棋", "黑白棋"], value="围棋", label="游戏类型")
+                        size = gr.Slider(8, 19, value=19, step=1, label="棋盘大小（黑白棋推荐偶数，默认8）")
+                        komi = gr.Number(value=7.5, label="贴目（仅围棋，白贴目）")
                         theme = gr.Dropdown(choices=["wood","light"], value="wood", label="主题")
-                    # 将“提示信息/状态”放入侧边栏中（由图片小预览承载英文渲染文本）
+                    # 将“提示信息/状态”放入侧边栏中
                     gr.Markdown("### 提示信息与状态预览")
                     status = gr.Image(label="状态预览", interactive=False, type="pil", height=160)
                     gr.Markdown(
-                        '<div class="footer-note">提示：点击棋盘交点落子；'
-                        '围棋使用“虚着”两次进入结算；可保存/读取局面。'
+                        '<div class="footer-note">提示：'
+                        '点击棋盘交点落子；围棋使用“虚着”两次进入结算；'
+                        '黑白棋若当前无合法着法将自动跳过一回合；可保存/读取局面。'
                         '</div>'
                     )
 
@@ -72,6 +73,7 @@ def build_app():
         # 为保持第二版对“主题需要点两次”的修复：先 set_theme 再 new_game
         def start_game(gt, sz, km, th):
             ctl.set_theme(th)
+            # 如果选择黑白棋且大小为奇数，仍可运行；推荐用户选 8/10/12 等偶数
             img = ctl.new_game(gt, int(sz), float(km))
             return img, img
 
@@ -123,7 +125,7 @@ def build_app():
         btn_save.click(on_save, inputs=[save_path], outputs=[canvas, status])
         btn_load.click(on_load, inputs=[load_path], outputs=[canvas, status])
 
-        # 页面加载时自动初始化默认 19×19 围棋盘，保持第二版行为
+        # 页面加载时自动初始化默认 19×19 围棋盘
         def _init():
             ctl.set_theme("wood")
             img = ctl.new_game("围棋", 19, 7.5)

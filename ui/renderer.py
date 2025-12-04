@@ -46,7 +46,8 @@ class ImageRenderer:
             draw.line((x, y0, x, y1), fill=line_color, width=2)
 
         # star points for Go standard (9x9, 13x13, 19x19)
-        if game_type.lower() in ("go", "weiqi", "围棋"):
+        low = game_type.lower()
+        if low in ("go", "weiqi", "围棋"):
             stars = []
             if size == 19:
                 pts = [3, 9, 15]
@@ -78,10 +79,7 @@ class ImageRenderer:
                 cx = margin + c*cell
                 cy = margin + r*cell
                 radius = int(cell*0.45)
-                if piece == Piece.BLACK:
-                    color = (20, 20, 20)
-                else:
-                    color = (240, 240, 240)
+                color = (20, 20, 20) if piece == Piece.BLACK else (240, 240, 240)
                 draw.ellipse((cx-radius, cy-radius, cx+radius, cy+radius), fill=color, outline=(0,0,0))
         # last move marker
         if last is not None:

@@ -1,19 +1,24 @@
 from __future__ import annotations
 from .gomoku import GomokuGame
 from .go import GoGame
+from .reversi import ReversiGame
 
 def normalize_game_type(game_type: str) -> str:
-    """Normalize user/meta type to canonical id: 'go' or 'gomoku'."""
+    """Normalize user/meta type to canonical id: 'go', 'gomoku', 'reversi'."""
     gt = (game_type or "").strip().lower()
     if gt in ("go", "weiqi", "围棋"):
         return "go"
     if gt in ("gomoku", "五子棋", "gobang", "renju"):
         return "gomoku"
+    if gt in ("reversi", "othello", "黑白棋"):
+        return "reversi"
     # 兼容此前可能写入的类名
     if gt in ("gogame",):
         return "go"
     if gt in ("gomokugame",):
         return "gomoku"
+    if gt in ("reversigame",):
+        return "reversi"
     raise ValueError(f"未知游戏类型: {game_type}")
 
 def create_game(game_type: str, size: int, komi: float = 7.5):
@@ -22,5 +27,6 @@ def create_game(game_type: str, size: int, komi: float = 7.5):
         return GomokuGame(size)
     if canon == "go":
         return GoGame(size, komi=komi)
-    # 理论不可达
+    if canon == "reversi":
+        return ReversiGame(size)
     raise ValueError("未知游戏类型")

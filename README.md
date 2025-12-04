@@ -15,17 +15,20 @@ UI 使用 Gradio，点击棋盘落子，美观、响应式。后端与 UI 分离
 ## 2. 架构与设计
 
 ### 2.1 分层架构
-- core/ 基础抽象与工具
-  - board.py：棋盘与位置表示、序列化
-  - rules.py：规则接口与共性算法（如连线检测、气与提子）
-  - game.py：Game 模板与通用回放/悔棋/保存/读取
-  - gomoku.py：五子棋实现（继承 Game，使用连线检测策略）
+- core/ 基础与棋规
+  - board.py：网格/位置/邻接/序列化
+  - rules.py：通用规则算法（五连、气与提子等）
+  - game.py：抽象模板（历史快照、悔棋、通用序列化）
+  - gomoku.py / go.py：既有棋种实现
+  - reversi.py：新增黑白棋实现（本次新增）
+  - factory.py：工厂方法扩展，统一规范类型标识
   - go.py：围棋实现（继承 Game，使用气与提子策略）
   - models.py：枚举、异常、数据模型
-- ui/ gradio 客户端
-  - app_ui.py：UI 控制器，事件绑定、画布绘制、布局
+- ui/
+  - renderer.py：PIL 渲染（英文文字），复用圆子绘制，支持不同棋种的视觉差异
+  - controller.py：UI 控制器（按钮与事件逻辑），扩展对 Reversi 的处理（跳过回合、终局判定、保存/读取）
+  - app_ui.py：Gradio UI，两列布局、右侧 Accordion 可隐藏、移动端响应式
 - app.py：入口
-- docs/ README.md、UML 图
 
 ### 2.2 关键类与职责
 - Position(row, col)：不可变坐标值对象
