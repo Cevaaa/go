@@ -8,17 +8,24 @@ class Game:
     def __init__(self, size: int):
         self.board = Board(size)
         self.current = PlayerColor.BLACK
-        self.history: List[Dict[str, Any]] = []  # list of snapshots for undo
+        self.history: List[Dict[str, Any]] = []
         self.ended: bool = False
         self._winner: Optional[PlayerColor] = None
         self.last_pos: Optional[Position] = None
         # 录像
         self.recorder: Recorder = Recorder(keyframe_every=10)
         self.recorder.start()
+        # 对局双方用户名（可选，仅用于保存/展示）
+        self.users: Dict[str, Optional[str]] = {"black": None, "white": None}
 
     @property
     def winner(self):
         return self._winner
+
+    def set_users(self, black_user: Optional[str], white_user: Optional[str]):
+        self.users = {"black": black_user, "white": white_user}
+        if hasattr(self, "recorder") and self.recorder:
+            self.recorder.set_users(black_user, white_user)
 
     def reset(self, size: int):
         self.board = Board(size)
@@ -27,9 +34,9 @@ class Game:
         self.ended = False
         self._winner = None
         self.last_pos = None
-        # reset recorder
         self.recorder = Recorder(keyframe_every=self.recorder.k if self.recorder else 10)
         self.recorder.start()
+        self.users = {"black": None, "white": None}
 
     def snapshot(self) -> Dict[str, Any]:
         return {
@@ -61,13 +68,11 @@ class Game:
         if self.ended:
             raise GameError("对局已结束")
         if move.player != self.current and not move.resign and not move.pass_move:
-            # resign 时允许任意方触发；pass_move 在围棋仅允许当前方（由 is_legal 控制）
             raise GameError("未到该方行棋")
         if not self.is_legal(move):
             raise GameError("不合法的落子/操作")
         self.history.append(self.snapshot())
         self.apply_move(move)
-        # 录像钩子
         if move.resign:
             self.recorder.on_resign(self, move.player)
         elif move.pass_move:
@@ -90,8 +95,8 @@ class Game:
             "ended": self.ended,
             "winner": self._winner.value if self._winner else None,
             "last": (self.last_pos.row, self.last_pos.col) if self.last_pos else None,
+            "meta": {"users": self.users},
         }
-        # 写入录像
         if hasattr(self, "recorder") and self.recorder and self.recorder.enabled:
             data["replay"] = self.recorder.to_dict()
         return data
@@ -106,16 +111,20 @@ class Game:
             self.last_pos = Position(r, c)
         else:
             self.last_pos = None
-        # 读取录像
+        # 用户信息（可选）
+        meta = data.get("meta", {})
+        if isinstance(meta, dict):
+            users = meta.get("users")
+            if isinstance(users, dict):
+                self.users = {"black": users.get("black"), "white": users.get("white")}
+        # 录像
         rep = data.get("replay")
         if rep:
             self.recorder = Recorder.from_dict(rep)
         else:
-            # 没有录像则新建（允许后续录制）
             self.recorder = Recorder(keyframe_every=10)
             self.recorder.start()
 
-    # Reversi 自动跳过的录像入口（供控制器在切手时调用）
     def record_skip(self, player: PlayerColor):
         if hasattr(self, "recorder") and self.recorder and self.recorder.enabled:
             self.recorder.on_skip(self, player)
