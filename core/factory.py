@@ -12,7 +12,6 @@ def normalize_game_type(game_type: str) -> str:
         return "gomoku"
     if gt in ("reversi", "othello", "黑白棋"):
         return "reversi"
-    # 兼容此前可能写入的类名
     if gt in ("gogame",):
         return "go"
     if gt in ("gomokugame",):

@@ -41,11 +41,6 @@ class ReversiGame(Game):
         return Piece.WHITE if player == PlayerColor.BLACK else Piece.BLACK
 
     def _captures_in_dir(self, start: Position, dr: int, dc: int, player: PlayerColor) -> List[Position]:
-        """
-        From empty 'start', step (dr,dc). If first at least one opponent piece,
-        and eventually a player's piece encountered with no gap, return list of
-        opponent positions to flip; otherwise empty.
-        """
         size = self.board.size
         r, c = start.row + dr, start.col + dc
         opp = self._opponent_piece(player)
@@ -61,13 +56,11 @@ class ReversiGame(Game):
                 continue
             if piece == me:
                 return buf if len(buf) > 0 else []
-            # empty or edge
             return []
         return []
 
     def legal_moves(self) -> Set[Position]:
         res: Set[Position] = set()
-        me = self._piece_of(self.current)
         size = self.board.size
         for r in range(size):
             for c in range(size):
@@ -87,7 +80,6 @@ class ReversiGame(Game):
         if move.resign:
             return True
         if move.pass_move:
-            # Reversi has no "pass" action from user; skipping is forced when no legal moves.
             return False
         if move.pos is None:
             return False
@@ -96,7 +88,6 @@ class ReversiGame(Game):
         p = move.pos
         if not self.board.in_bounds(p) or not self.board.is_empty(p):
             return False
-        # must flip at least one direction
         for dr, dc in DIR8:
             if self._captures_in_dir(p, dr, dc, move.player):
                 return True
@@ -114,14 +105,11 @@ class ReversiGame(Game):
             flips.extend(self._captures_in_dir(p, dr, dc, move.player))
         if not flips:
             raise GameError("非法：该位置不能翻转任一对方棋子")
-        # place and flip
         self.board.set(p, me)
         for q in flips:
             self.board.set(q, me)
         self.last_pos = p
-        # switch turn
         self.current = PlayerColor.WHITE if self.current == PlayerColor.BLACK else PlayerColor.BLACK
-        # end detection handled by controller (both no legal moves or board full)
 
     def count_discs(self) -> Dict[str, int]:
         size = self.board.size

@@ -5,6 +5,11 @@ from core.models import PlayerColor, Move, Position, GameError
 from core.factory import create_game, normalize_game_type
 from .renderer import ImageRenderer
 
+# AI
+from core.ai.base import IGameAI
+from core.ai.random_ai import RandomReversiAI
+from core.ai.reversi_rule_ai import HeuristicReversiAI
+
 class UIController:
     def __init__(self):
         self.game = None
@@ -12,31 +17,64 @@ class UIController:
         self.game_type = "围棋"
         self.size = 19
         self.komi = 7.5
-        # 图片文字使用英文，UI弹窗中文
         self.message = "Welcome to the Board Game Platform"
         self.theme = "wood"
+        # AI 配置
+        self.black_side = "玩家"  # or "AI"
+        self.white_side = "玩家"  # or "AI"
+        self.ai_kind = "Reversi"  # 预留扩展
+        self.ai_level = 1         # 1: Random, 2: Heuristic
+        self._ai_black: Optional[IGameAI] = None
+        self._ai_white: Optional[IGameAI] = None
 
     def set_theme(self, theme: str):
         self.theme = theme
         self.renderer.set_theme(theme)
 
-    def new_game(self, game_type: str, size: int, komi: float):
+    def _build_ai(self, level: int) -> IGameAI:
+        # 仅 Reversi 有效
+        if level == 1:
+            return RandomReversiAI()
+        return HeuristicReversiAI(alpha=0.12)
+
+    def _refresh_ai_agents(self):
+        gt = normalize_game_type(self.game_type)
+        if gt != "reversi":
+            self._ai_black = None
+            self._ai_white = None
+            return
+        self._ai_black = self._build_ai(self.ai_level) if self.black_side == "AI" else None
+        self._ai_white = self._build_ai(self.ai_level) if self.white_side == "AI" else None
+
+    def new_game(self, game_type: str, size: int, komi: float, black_side: str = "玩家", white_side: str = "玩家", ai_kind: str = "Reversi", ai_level: int = 1):
         if size < 8 or size > 19:
             raise GameError("棋盘大小需在 8~19 之间")
         self.game_type = game_type
         self.size = size
         self.komi = komi
+        self.black_side = black_side
+        self.white_side = white_side
+        self.ai_kind = ai_kind
+        self.ai_level = int(ai_level)
         self.game = create_game(game_type, size, komi)
-        # 特殊说明：Reversi 初始即放置4子，current=BLACK
-        self.message = f"New game: {game_type} {size}x{size}"
+        self._refresh_ai_agents()
+        # 非 Reversi 的棋种不开启AI
+        if normalize_game_type(game_type) != "reversi" and (self.black_side == "AI" or self.white_side == "AI"):
+            self.black_side = "玩家"
+            self.white_side = "玩家"
+            self._ai_black = None
+            self._ai_white = None
+            self.message = "AI is only available for Reversi currently. Switched to PvP."
+        else:
+            self.message = f"New game: {game_type} {size}x{size}"
+        # 新局后尝试让 AI 先手（如黑为AI）
+        self._maybe_ai_play_loop()
         return self.get_image()
 
     def _turn_label(self):
         if not self.game:
             return ""
-        # 通用终局渲染（英文，仅用于图片）
         if self.game.ended:
-            # 尝试围棋详细分数
             if self.game_type.lower() in ("go","weiqi","围棋"):
                 from core.go import GoGame
                 if isinstance(self.game, GoGame):
@@ -50,7 +88,6 @@ class UIController:
                             return f"End: White wins (B {b:.1f} : W {w:.1f}, komi {self.game.komi})"
                         else:
                             return f"End: Draw (B {b:.1f} : W {w:.1f})"
-            # 其他棋种按 winner 渲染
             if self.game.winner is None:
                 return "End: Draw"
             else:
@@ -70,7 +107,6 @@ class UIController:
     def _ended_popup(self) -> Optional[str]:
         if not self.game or not getattr(self.game, "ended", False):
             return None
-        # 围棋：按分数提示
         if self.game_type.lower() in ("go","weiqi","围棋"):
             from core.go import GoGame
             if isinstance(self.game, GoGame):
@@ -84,28 +120,23 @@ class UIController:
                         return "白方胜利！请开启新对局。"
                     else:
                         return "平局！请开启新对局。"
-        # 其他（五子棋/黑白棋）：依据 winner 或计数
         if self.game.winner is None:
             return "平局！请开启新对局。"
         else:
             return f"{'黑方' if self.game.winner==PlayerColor.BLACK else '白方'}胜利！请开启新对局。"
 
+    # ------- Reversi 辅助：自动跳过/判终局 -------
     def _reversi_auto_skip_or_end(self):
-        """黑白棋：若当前方无合法着法则自动跳过；若双方均无合法着法则终局并判胜负。"""
         from core.reversi import ReversiGame
         if not isinstance(self.game, ReversiGame) or self.game.ended:
-            return
+            return False
         moves_now = self.game.legal_moves()
         if moves_now:
-            return
-        # 当前无合法手：切手并提示
-        prev = self.game.current
+            return False
         self.game.current = PlayerColor.WHITE if self.game.current == PlayerColor.BLACK else PlayerColor.BLACK
         self.message = "No legal move; turn skipped."
-        # 切手后检查对方
         moves_after = self.game.legal_moves()
         if not moves_after:
-            # 双方均无合法手：终局，按子数判胜负
             counts = self.game.count_discs()
             b, w = counts["BLACK"], counts["WHITE"]
             self.game.ended = True
@@ -115,9 +146,9 @@ class UIController:
                 self.game._winner = PlayerColor.WHITE
             else:
                 self.game._winner = None
+        return True
 
     def _reversi_check_full_end(self):
-        """黑白棋：棋盘满也应终局计数。"""
         from core.reversi import ReversiGame
         if not isinstance(self.game, ReversiGame) or self.game.ended:
             return
@@ -141,11 +172,57 @@ class UIController:
             else:
                 self.game._winner = None
 
+    # ------- AI 回合循环 -------
+    def _agent_for_current(self) -> Optional[IGameAI]:
+        if normalize_game_type(self.game_type) != "reversi":
+            return None
+        if self.game.current == PlayerColor.BLACK:
+            return self._ai_black
+        else:
+            return self._ai_white
+
+    def _maybe_ai_play_once(self) -> bool:
+        if not self.game or self.game.ended:
+            return False
+        # Reversi 开局/上一手后可能无合法步，先尝试跳过或终局
+        if normalize_game_type(self.game_type) == "reversi":
+            if self._reversi_auto_skip_or_end():
+                return True
+            if self.game.ended:
+                return True
+        agent = self._agent_for_current()
+        if agent is None:
+            return False
+        pos = agent.select_move(self.game)
+        if pos is None:
+            # 无合法步（理论上 _reversi_auto_skip_or_end 已处理）
+            return False
+        try:
+            self.game.step(Move(player=self.game.current, pos=pos))
+            self.message = f"AI Move: {pos.row},{pos.col}"
+            if normalize_game_type(self.game_type) == "reversi":
+                self._reversi_check_full_end()
+                if not self.game.ended:
+                    self._reversi_auto_skip_or_end()
+            return True
+        except GameError:
+            # 极少数竞态/非法（不应发生），忽略
+            return False
+
+    def _maybe_ai_play_loop(self):
+        # 连续让所有AI方执行，直到轮到玩家或对局结束
+        safety = 512
+        progressed = True
+        while progressed and safety > 0:
+            progressed = self._maybe_ai_play_once()
+            safety -= 1
+
+    # ------- 事件接口 -------
     def click_canvas(self, evt) -> Tuple[object, Optional[str]]:
         if not self.game:
             return self.get_image(), "请先开始新对局"
-        # 黑白棋：先检查是否需要自动跳过（上一手结束后可能无合法手）
-        if self.game_type.lower() in ("reversi","黑白棋","othello"):
+
+        if normalize_game_type(self.game_type) == "reversi":
             self._reversi_auto_skip_or_end()
             if self.game.ended:
                 return self.get_image(), self._ended_popup()
@@ -153,29 +230,37 @@ class UIController:
         if self.game.ended:
             return self.get_image(), "对局已结束，请开启新对局。"
 
+        # 若轮到 AI，不允许玩家落子，直接触发 AI 回合
+        agent = self._agent_for_current()
+        if agent is not None:
+            self._maybe_ai_play_loop()
+            img = self.get_image()
+            if self.game.ended:
+                return img, self._ended_popup()
+            return img, None
+
         pos = self.renderer.coord_from_xy(evt.index[0], evt.index[1], self.game.board)
         if pos is None:
             self.message = "Please click near a grid intersection"
             return self.get_image(), "请点击靠近网格交点的位置"
 
-        # 普通走子
         move = Move(player=self.game.current, pos=pos)
         try:
             self.game.step(move)
             self.message = f"Move: {pos.row},{pos.col}"
-            # 黑白棋：步后可能出现自动跳过或终局
-            if self.game_type.lower() in ("reversi","黑白棋","othello"):
+            if normalize_game_type(self.game_type) == "reversi":
                 self._reversi_check_full_end()
                 if not self.game.ended:
                     self._reversi_auto_skip_or_end()
+            # 玩家走子后，若轮到AI，自动走
+            self._maybe_ai_play_loop()
             img = self.get_image()
             if self.game.ended:
                 return img, self._ended_popup()
             return img, None
         except GameError as e:
             self.message = "Illegal move or operation"
-            # 对 Reversi 给出更具体提示
-            if self.game_type.lower() in ("reversi","黑白棋","othello"):
+            if normalize_game_type(self.game_type) == "reversi":
                 return self.get_image(), "非法落子：该位置无法翻转对方棋子"
             return self.get_image(), f"错误：{str(e)}"
 
@@ -192,6 +277,7 @@ class UIController:
             self.game.step(Move(player=self.game.current, pass_move=True))
             if self.game.ended:
                 self.message = "Both passed. Scoring."
+                # 围棋终局后不再触发AI（围棋未启用AI）
                 return self.get_image(), self._ended_popup()
             else:
                 self.message = "Pass"
@@ -225,7 +311,6 @@ class UIController:
             return self.get_image(), "请先开始新对局"
         if not text_path:
             return self.get_image(), "请输入保存文件名（如 save.json）"
-        # 统一写入规范化棋种标识
         try:
             canon = normalize_game_type(self.game_type)
         except Exception:
@@ -250,7 +335,6 @@ class UIController:
             if not data:
                 raise ValueError("存档损坏")
 
-            # 解析棋种：优先 meta.type（规范化），再兼容 data.type 与中文/类名
             meta_type = meta.get("type")
             gt = None
             if meta_type:
@@ -263,7 +347,6 @@ class UIController:
                     except Exception:
                         gt = None
             if gt is None:
-                # 兜底：无 komi 更像 gomoku/reversi，此处保守选 gomoku
                 gt = "gomoku"
 
             self.game_type = ("围棋" if gt == "go" else ("五子棋" if gt == "gomoku" else "黑白棋"))
@@ -272,8 +355,13 @@ class UIController:
 
             self.game = create_game(gt, self.size, self.komi)
             self.game.deserialize(data)
-
             self.message = f"Loaded: {self.game_type} {self.size}"
+
+            # 读档后根据当前UI配置重建AI（不从存档恢复AI配置）
+            self._refresh_ai_agents()
+            # 如果轮到AI则自动走
+            self._maybe_ai_play_loop()
+
             return self.get_image(), f"读取存档成功：{self.game_type} {self.size}"
         except Exception as e:
             self.message = "Load failed"

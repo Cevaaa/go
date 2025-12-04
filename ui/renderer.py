@@ -45,7 +45,7 @@ class ImageRenderer:
             y1 = margin + cell*(size-1)
             draw.line((x, y0, x, y1), fill=line_color, width=2)
 
-        # star points for Go standard (9x9, 13x13, 19x19)
+        # star points only for Go
         low = game_type.lower()
         if low in ("go", "weiqi", "围棋"):
             stars = []
@@ -69,7 +69,7 @@ class ImageRenderer:
                 cy = margin + r*cell
                 draw.ellipse((cx-4, cy-4, cx+4, cy+4), fill=line_color)
 
-        # stones
+        # stones/discs
         for r in range(size):
             for c in range(size):
                 p = Position(r, c)
@@ -98,7 +98,6 @@ class ImageRenderer:
         return img
 
     def coord_from_xy(self, x, y, board: Board):
-        # x,y in pixel, map to nearest grid intersection
         cell = self.cell
         margin = self.margin
         size = board.size
